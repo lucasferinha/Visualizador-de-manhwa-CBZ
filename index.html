@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
+    <title>Visualizador de Manhwa - Leitor Online de CBZ</title>
+    <meta name="description" content="Visualizador gratuito de arquivos CBZ para leitura de manhwas e quadrinhos online. Interface simples e carregamento rápido.">
+    <meta name="author" content="Lucas">
+    <link rel="stylesheet" href="style.css">
+    <script src="script.js" defer></script>
+</head>
+
+<body>
+    <div class="app">
+        <header class="app__header">
+            <figure class="app__logo">
+                <img src="frog.svg" alt="Logo do Visualizador de Manhwa">
+            </figure>
+
+            <div class="upload">
+                <label for="upload-input"><img src="file-plus.svg" alt="">Escolha os arquivos</label>
+                <input type="file" id="upload-input" class="upload__input hidden-input" accept=".cbz" multiple>
+            </div>
+
+            <div class="chapter-nav" id="chapter-nav" style="display: none;">
+                <label for="chapter-select">Capítulo:</label>
+                <select id="chapter-select" class="chapter-nav__select"></select>
+            </div>
+        </header>
+
+        <main class="viewer" id="viewer">
+            <p>Por favor, selecione um ou mais arquivos CBZ para visualizar.</p>
+        </main>
+
+        <footer class="app__footer">
+            <p>Role para ver todas as páginas do capítulo carregado. Use os controles abaixo para mudar de capítulo.</p>
+            <div class="chapter-controls">
+                <button id="chapter-prev" class="chapter-controls__button">Capítulo Anterior</button>
+                <button id="chapter-next" class="chapter-controls__button">Próximo Capítulo</button>
+            </div>
+        </footer>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</body>
+
+</html>
