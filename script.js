@@ -10,6 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let loadedCBZFiles = [];
   let currentChapterIndex = -1;
   let currentChapterObjectURLs = new Set();
+  let isProcessing = false;
 
   // ==============================
   // Utilidades
@@ -44,6 +45,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentChapterObjectURLs.forEach((url) => URL.revokeObjectURL(url));
     currentChapterObjectURLs.clear();
     viewer.innerHTML = "";
+    isProcessing = false;
   }
 
   function updateChapterNavigationUI() {
@@ -55,9 +57,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ==============================
-  // Processamento de arquivos CBZ (sem Web Worker)
+  // Processamento de arquivos CBZ (com yield para não travar)
   // ==============================
-  async function processCBZFile(file) {
+  async function* processCBZFileGenerator(file) {
     try {
       const zip = await JSZip.loadAsync(file);
       const entries = [];
@@ -73,27 +75,65 @@ document.addEventListener("DOMContentLoaded", () => {
       entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       
       const total = entries.length;
-      const fragment = document.createDocumentFragment();
-      const imageURLs = [];
 
-      // Processar cada imagem
       for (let i = 0; i < total; i++) {
+        // Permitir que a interface responda a cada imagem
+        if (i % 3 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
         const blob = await entries[i].async("blob");
         const objectURL = URL.createObjectURL(blob);
-        imageURLs.push(objectURL);
+        
+        yield {
+          objectURL,
+          name: entries[i].name,
+          progress: (i + 1) / total,
+          index: i,
+          total
+        };
+      }
+    } catch (error) {
+      throw new Error(`Erro ao processar arquivo: ${error.message}`);
+    }
+  }
+
+  // ==============================
+  // Exibir Capítulo (com processamento incremental)
+  // ==============================
+  async function displayChapter(chapterIndex) {
+    if (chapterIndex < 0 || chapterIndex >= loadedCBZFiles.length || isProcessing) return;
+
+    cleanupPreviousChapter();
+    currentChapterIndex = chapterIndex;
+    const file = loadedCBZFiles[chapterIndex];
+    
+    viewer.innerHTML = `<p class="viewer__loading">Extraindo ${file.name}...</p>`;
+    setupIntersectionObserver();
+
+    isProcessing = true;
+    const fragment = document.createDocumentFragment();
+
+    try {
+      const processor = processCBZFileGenerator(file);
+      let result = await processor.next();
+
+      while (!result.done && isProcessing) {
+        const { objectURL, name, progress, index, total } = result.value;
+        
         currentChapterObjectURLs.add(objectURL);
 
         // Atualizar progresso
-        const progress = Math.round(((i + 1) / total) * 100);
+        const pct = Math.round(progress * 100);
         const loadingElement = viewer.querySelector(".viewer__loading");
         if (loadingElement) {
-          loadingElement.textContent = `Carregando... ${progress}%`;
+          loadingElement.textContent = `Carregando... ${pct}% (${index + 1}/${total})`;
         }
 
         // Criar elemento de imagem
         const img = document.createElement("img");
         img.dataset.src = objectURL;
-        img.alt = entries[i].name;
+        img.alt = name;
         img.className = "viewer__page";
         img.loading = "lazy";
         img.decoding = "async";
@@ -107,44 +147,31 @@ document.addEventListener("DOMContentLoaded", () => {
         intersectionObserver.observe(img);
 
         // Inserir em lotes para melhor performance
-        if (fragment.childNodes.length >= 3) {
+        if (fragment.childNodes.length >= 2) {
           viewer.appendChild(fragment);
         }
+
+        // Processar próxima imagem
+        result = await processor.next();
       }
 
-      // Inserir qualquer imagem restante
+      // Inserir imagens restantes
       if (fragment.childNodes.length > 0) {
         viewer.appendChild(fragment);
       }
 
-      return imageURLs;
+      if (isProcessing) {
+        viewer.querySelector(".viewer__loading")?.remove();
+        updateChapterNavigationUI();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+
     } catch (error) {
-      throw new Error(`Erro ao processar arquivo: ${error.message}`);
-    }
-  }
-
-  // ==============================
-  // Exibir Capítulo
-  // ==============================
-  async function displayChapter(chapterIndex) {
-    if (chapterIndex < 0 || chapterIndex >= loadedCBZFiles.length) return;
-
-    cleanupPreviousChapter();
-    currentChapterIndex = chapterIndex;
-    const file = loadedCBZFiles[chapterIndex];
-    
-    viewer.innerHTML = `<p class="viewer__loading">Extraindo ${file.name}...</p>`;
-    setupIntersectionObserver();
-
-    try {
-      await processCBZFile(file);
-      
-      viewer.querySelector(".viewer__loading")?.remove();
-      updateChapterNavigationUI();
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      
-    } catch (error) {
-      viewer.innerHTML = `<p class="viewer__loading">Erro: ${error.message}</p>`;
+      if (isProcessing) {
+        viewer.innerHTML = `<p class="viewer__loading">Erro: ${error.message}</p>`;
+      }
+    } finally {
+      isProcessing = false;
     }
   }
 
@@ -194,14 +221,14 @@ document.addEventListener("DOMContentLoaded", () => {
   prevChapterButton.addEventListener(
     "click",
     throttle(() => {
-      if (currentChapterIndex > 0) displayChapter(currentChapterIndex - 1);
+      if (currentChapterIndex > 0 && !isProcessing) displayChapter(currentChapterIndex - 1);
     }, 400)
   );
 
   nextChapterButton.addEventListener(
     "click",
     throttle(() => {
-      if (currentChapterIndex < loadedCBZFiles.length - 1)
+      if (currentChapterIndex < loadedCBZFiles.length - 1 && !isProcessing)
         displayChapter(currentChapterIndex + 1);
     }, 400)
   );
@@ -219,7 +246,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     chapterNavigation.style.display = "none";
-    console.log("Visualizador iniciado (sem Web Worker)");
+    console.log("Visualizador iniciado com processamento incremental");
   }
 
   init();
