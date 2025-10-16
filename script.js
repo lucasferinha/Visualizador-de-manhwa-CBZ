@@ -10,46 +10,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let loadedCBZFiles = [];
   let currentChapterIndex = -1;
   let currentChapterObjectURLs = new Set();
-  let worker = null;
-
-  // ==============================
-  // Web Worker (inline)
-  // ==============================
-  const workerCode = `
-    importScripts('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
-
-    self.onmessage = async (e) => {
-      const { file } = e.data;
-      try {
-        const zip = await JSZip.loadAsync(file);
-        const entries = [];
-
-        zip.forEach((path, entry) => {
-          if (!entry.dir && /\.(jpe?g|png|gif|webp|avif)$/i.test(entry.name)) {
-            entries.push(entry);
-          }
-        });
-
-        entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-        const total = entries.length;
-
-        for (let i = 0; i < total; i++) {
-          const blob = await entries[i].async("blob");
-          const objectURL = URL.createObjectURL(blob);
-          self.postMessage({ progress: (i + 1) / total, name: entries[i].name, objectURL });
-        }
-
-        self.postMessage({ done: true });
-      } catch (err) {
-        self.postMessage({ error: err.message });
-      }
-    };
-  `;
-
-  function createWorker() {
-    const blob = new Blob([workerCode], { type: "application/javascript" });
-    return new Worker(URL.createObjectURL(blob));
-  }
 
   // ==============================
   // Utilidades
@@ -95,36 +55,45 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ==============================
-  // Exibir Capítulo (com Worker)
+  // Processamento de arquivos CBZ (sem Web Worker)
   // ==============================
-  async function displayChapter(chapterIndex) {
-    if (chapterIndex < 0 || chapterIndex >= loadedCBZFiles.length) return;
+  async function processCBZFile(file) {
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const entries = [];
+      
+      // Coletar todas as entradas de imagem
+      zip.forEach((path, entry) => {
+        if (!entry.dir && /\.(jpe?g|png|gif|webp|avif)$/i.test(entry.name)) {
+          entries.push(entry);
+        }
+      });
 
-    cleanupPreviousChapter();
-    currentChapterIndex = chapterIndex;
-    const file = loadedCBZFiles[chapterIndex];
-    viewer.innerHTML = `<p class="viewer__loading">Extraindo ${file.name}...</p>`;
-    setupIntersectionObserver();
+      // Ordenar as páginas numericamente
+      entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      
+      const total = entries.length;
+      const fragment = document.createDocumentFragment();
+      const imageURLs = [];
 
-    if (worker) worker.terminate();
-    worker = createWorker();
-
-    const fragment = document.createDocumentFragment();
-
-    worker.onmessage = (e) => {
-      const { progress, name, objectURL, done, error } = e.data;
-
-      if (error) {
-        viewer.innerHTML = `<p>Erro: ${error}</p>`;
-        worker.terminate();
-        return;
-      }
-
-      if (objectURL) {
+      // Processar cada imagem
+      for (let i = 0; i < total; i++) {
+        const blob = await entries[i].async("blob");
+        const objectURL = URL.createObjectURL(blob);
+        imageURLs.push(objectURL);
         currentChapterObjectURLs.add(objectURL);
+
+        // Atualizar progresso
+        const progress = Math.round(((i + 1) / total) * 100);
+        const loadingElement = viewer.querySelector(".viewer__loading");
+        if (loadingElement) {
+          loadingElement.textContent = `Carregando... ${progress}%`;
+        }
+
+        // Criar elemento de imagem
         const img = document.createElement("img");
         img.dataset.src = objectURL;
-        img.alt = name;
+        img.alt = entries[i].name;
         img.className = "viewer__page";
         img.loading = "lazy";
         img.decoding = "async";
@@ -137,35 +106,46 @@ document.addEventListener("DOMContentLoaded", () => {
         fragment.appendChild(img);
         intersectionObserver.observe(img);
 
-        // ===== INÍCIO DA CORREÇÃO =====
-        // insere em lotes pequenos para evitar travamentos
+        // Inserir em lotes para melhor performance
         if (fragment.childNodes.length >= 3) {
-          // Anexa o fragmento diretamente. Seus filhos são movidos para o viewer,
-          // e o fragmento fica vazio, pronto para o próximo lote.
           viewer.appendChild(fragment);
         }
-        // ===== FIM DA CORREÇÃO =====
       }
 
-      if (progress) {
-        const pct = Math.round(progress * 100);
-        const loadingElement = viewer.querySelector(".viewer__loading");
-        if (loadingElement) {
-          loadingElement.textContent = `Carregando... ${pct}%`;
-        }
-      }
-
-      if (done) {
-        viewer.querySelector(".viewer__loading")?.remove();
-        // Adiciona o lote final de imagens que pode ter sobrado no fragmento
+      // Inserir qualquer imagem restante
+      if (fragment.childNodes.length > 0) {
         viewer.appendChild(fragment);
-        updateChapterNavigationUI();
-        window.scrollTo({ top: 0, behavior: "smooth" });
-        worker.terminate();
       }
-    };
 
-    worker.postMessage({ file });
+      return imageURLs;
+    } catch (error) {
+      throw new Error(`Erro ao processar arquivo: ${error.message}`);
+    }
+  }
+
+  // ==============================
+  // Exibir Capítulo
+  // ==============================
+  async function displayChapter(chapterIndex) {
+    if (chapterIndex < 0 || chapterIndex >= loadedCBZFiles.length) return;
+
+    cleanupPreviousChapter();
+    currentChapterIndex = chapterIndex;
+    const file = loadedCBZFiles[chapterIndex];
+    
+    viewer.innerHTML = `<p class="viewer__loading">Extraindo ${file.name}...</p>`;
+    setupIntersectionObserver();
+
+    try {
+      await processCBZFile(file);
+      
+      viewer.querySelector(".viewer__loading")?.remove();
+      updateChapterNavigationUI();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      
+    } catch (error) {
+      viewer.innerHTML = `<p class="viewer__loading">Erro: ${error.message}</p>`;
+    }
   }
 
   // ==============================
@@ -229,7 +209,6 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("beforeunload", () => {
     cleanupPreviousChapter();
     intersectionObserver?.disconnect();
-    worker?.terminate();
   });
 
   function init() {
@@ -240,7 +219,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     chapterNavigation.style.display = "none";
-    console.log("Visualizador com Web Worker iniciado");
+    console.log("Visualizador iniciado (sem Web Worker)");
   }
 
   init();
